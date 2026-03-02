@@ -1,5 +1,17 @@
 from pydantic import BaseModel
+from datetime import datetime
+from typing import Optional
 
-class RecordCreateRequest(BaseModel):
+class SOAPSummary(BaseModel):
+    s_text: str
+    o_text: str
+    a_text: str
+    p_text: str
+
+class RecordResponse(BaseModel):
+    message: str
+    original_text: Optional[str] = None
+    soap_summary: SOAPSummary
     patient_id: int
-    raw_text: str 
+    id: int
+    created_at: datetime

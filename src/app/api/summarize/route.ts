@@ -1,41 +1,38 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse, NextRequest } from "next/server";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-console.log("API KEY loaded:", process.env.GEMINI_API_KEY ? "YES" : "NO");
 export async function POST(req: NextRequest) {
     try {
-        // 1. フロントから音声ファイルを受け取る
+        // 1. フロントからFormDataを受け取る
         const formData = await req.formData();
-        const audioFile = formData.get("audio") as File;
         
-        if (!audioFile) {
-            return NextResponse.json({ error: "音声ファイルがありません" }, { status: 400 });
+        // デモ用としてpatient_id を固定で付与する (実際のアプリではログインユーザーや選択患者等から取得)
+        if (!formData.has("patient_id")) {
+            formData.append("patient_id", "1");
         }
-        // 2. 音声ファイルをbase64に変換 
-        const arrayBuffer = await audioFile.arrayBuffer();
-        const base64Audio = Buffer.from(arrayBuffer).toString("base64");
         
-        // 3. Gemini APIに音声 + 要約プロンプトを送信
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        // 2. FastAPI バックエンドへプロキシする
+        console.log("Sending data to FastAPI backend...");
+        const response = await fetch("http://localhost:8000/api/records", {
+            method: "POST",
+            body: formData,
+            // fetch() を使って FormData を送ることにより
+            // Content-Type は boundary 付きの multipart/form-data に自動設定されます。
+        });
 
-        const result = await model.generateContent([
-            {
-                inlineData: {
-                    mimeType: audioFile.type,
-                    data: base64Audio
-                },
-            },
-            { text: "この音声の内容を簡潔に要約してください。箇条書きで要点をまとめてください"},
-        ]);
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("FastAPI Error:", response.status, errorText);
+            return NextResponse.json({ error: "バックエンド処理中にエラーが発生しました" }, { status: response.status });
+        }
 
-        // 4. 要約テキストを返す
-        const summary = result.response.text();
-        return NextResponse.json({ summary });
+        const data = await response.json();
+        
+        // 3. FastAPIからのレスポンスをそのまま返す
+        return NextResponse.json(data);
 
     } catch (error) {
         console.error("APIエラー:", error);
-        return NextResponse.json({ error: "要約中にエラーが発生しました" }, { status: 500 });
+        return NextResponse.json({ error: "中継処理中にエラーが発生しました" }, { status: 500 });
     }
 }
 

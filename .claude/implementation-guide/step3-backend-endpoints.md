@@ -1,20 +1,40 @@
+# Step 3: Backend — FastAPI エンドポイント追加
+
+## 対象ファイル
+`backend/main.py`
+
+## 現在の内容
+```python
 import os
 from dotenv import load_dotenv
 
-# プロジェクトルートの .env.local を読み込む
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env.local"))
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 from fastapi import FastAPI, Depends, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from schemas import RecordResponse, SOAPSummary, PatientCreate, PatientResponse
+from schemas import RecordResponse, SOAPSummary
 from services import summarize_audio_to_soap
 from database import get_db
-from models import Record, Patient
-
+from models import Record
 
 app = FastAPI(title="看護記録 AIサポートAPI")
 
+# ... 既存エンドポイント ...
+```
+
+## 変更内容
+
+### 1. import 追加
+既存の import 行を修正：
+```python
+from schemas import RecordResponse, SOAPSummary, PatientCreate, PatientResponse
+from models import Record, Patient
+```
+
+### 2. 追加する CORS 設定
+既存の `app = FastAPI(...)` の直後に追加：
+```python
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
@@ -23,11 +43,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+```
+（注: 既に CORS 設定がある場合はスキップ）
 
-@app.get("/")
-def read_root():
-    return {"message": "バックエンドAPIが正常に動作しています"}
+### 3. 追加するエンドポイント（既存の `@app.post("/api/records")` の**前**に配置）
 
+```python
 # --- 患者管理 API ---
 
 @app.get("/api/patients")
@@ -69,37 +90,17 @@ def get_patient_records(patient_id: int, db: Session = Depends(get_db)):
         }
         for r in records
     ]
+```
 
-@app.post("/api/records", response_model=RecordResponse)
-async def create_record(
-    patient_id: int = Form(...),
-    audio: UploadFile = File(...),
-    db: Session = Depends(get_db)
-):
-    print(f"受付: 患者ID {patient_id} のデータを受信しました")
+## ガードレール
+- 既存の `@app.get("/")` と `@app.post("/api/records")` は一切変更しないこと
+- 新しいエンドポイントは `/api/patients` プレフィックスに統一
+- `list_patients` は `order_by(Patient.name)` で名前順ソート
+- `get_patient_records` は `order_by(Record.created_at.desc())` で新しい順
+- `created_at` は `.isoformat()` で文字列化してからJSON返却（datetime直接返却はシリアライズエラーの原因）
 
-    # 1. 音声を処理してSOAPと全体の文字起こし(raw_text)を取得
-    soap_data_dict, raw_text = await summarize_audio_to_soap(audio)
-
-    # 2. 取得したデータをDBに保存
-    new_record = Record(
-        patient_id=patient_id,
-        raw_text=raw_text,
-        s_text=soap_data_dict.get("s_text", ""),
-        o_text=soap_data_dict.get("o_text", ""),
-        a_text=soap_data_dict.get("a_text", ""),
-        p_text=soap_data_dict.get("p_text", "")
-    )
-    db.add(new_record)
-    db.commit()
-    db.refresh(new_record)
-
-    # 3. レスポンス整形
-    return RecordResponse(
-        message="AIによるSOAP要約が完了しました!",
-        original_text=raw_text,
-        soap_summary=SOAPSummary(**soap_data_dict),
-        patient_id=patient_id,
-        id=new_record.id,
-        created_at=new_record.created_at
-    )
+## 完了チェック
+- [ ] `cd backend && python -c "from main import app; print('OK')"` が成功する
+- [ ] import 文に `PatientCreate`, `Patient` が含まれている
+- [ ] 3つの新エンドポイント（GET /api/patients, POST /api/patients, GET /api/patients/{patient_id}/records）が追加されている
+- [ ] 既存の2エンドポイント（GET /, POST /api/records）が変更されていない

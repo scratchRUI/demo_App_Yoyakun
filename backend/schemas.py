@@ -15,3 +15,11 @@ class RecordResponse(BaseModel):
     patient_id: int
     id: int
     created_at: datetime
+
+class PatientCreate(BaseModel):
+    name: str
+
+class PatientResponse(BaseModel):
+    id: int
+    name: str
+    created_at: datetime

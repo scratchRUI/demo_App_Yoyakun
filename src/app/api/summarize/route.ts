@@ -5,9 +5,12 @@ export async function POST(req: NextRequest) {
         // 1. フロントからFormDataを受け取る
         const formData = await req.formData();
         
-        // デモ用としてpatient_id を固定で付与する (実際のアプリではログインユーザーや選択患者等から取得)
+        // patient_id がフロントエンドから送信されていることを確認
         if (!formData.has("patient_id")) {
-            formData.append("patient_id", "1");
+            return NextResponse.json(
+                { error: "patient_id が指定されていません" },
+                { status: 400 }
+            );
         }
         
         // 2. FastAPI バックエンドへプロキシする

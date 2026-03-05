@@ -5,13 +5,15 @@ export async function POST(req: NextRequest) {
         // 1. フロントからFormDataを受け取る
         const formData = await req.formData();
         
-        // デモ用としてpatient_id を固定で付与する (実際のアプリではログインユーザーや選択患者等から取得)
+        // patient_id がフロントエンドから送信されていることを確認
         if (!formData.has("patient_id")) {
-            formData.append("patient_id", "1");
+            return NextResponse.json(
+                { error: "patient_id が指定されていません" },
+                { status: 400 }
+            );
         }
         
         // 2. FastAPI バックエンドへプロキシする
-        console.log("Sending data to FastAPI backend...");
         const response = await fetch("http://localhost:8000/api/records", {
             method: "POST",
             body: formData,
@@ -35,4 +37,3 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "中継処理中にエラーが発生しました" }, { status: 500 });
     }
 }
-

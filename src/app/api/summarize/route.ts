@@ -14,7 +14,6 @@ export async function POST(req: NextRequest) {
         }
         
         // 2. FastAPI バックエンドへプロキシする
-        console.log("Sending data to FastAPI backend...");
         const response = await fetch("http://localhost:8000/api/records", {
             method: "POST",
             body: formData,
@@ -38,4 +37,3 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "中継処理中にエラーが発生しました" }, { status: 500 });
     }
 }
-

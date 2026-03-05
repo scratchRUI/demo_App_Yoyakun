@@ -1,21 +1,30 @@
-import os
+import logging
+from pathlib import Path
+
 from dotenv import load_dotenv
-
-# プロジェクトルートの .env.local を読み込む
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env.local"))
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
-
-from fastapi import FastAPI, Depends, UploadFile, File, Form
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from schemas import RecordResponse, SOAPSummary, PatientCreate, PatientResponse
-from services import summarize_audio_to_soap
-from database import get_db
-from models import Record, Patient
 
+from database import get_db
+from repositories import (
+    create_patient as create_patient_in_db,
+    create_record as create_record_in_db,
+    get_patient_by_id,
+    list_patients as list_patients_from_db,
+    list_records_by_patient_id,
+)
+from schemas import PastRecordResponse, PatientCreate, PatientResponse, RecordResponse
+from serializers import build_record_response
+from services import summarize_audio_to_soap
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env.local")
+load_dotenv(BASE_DIR / ".env")
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="看護記録 AIサポートAPI")
-
-from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,82 +33,81 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
-def read_root():
+def read_root() -> dict[str, str]:
     return {"message": "バックエンドAPIが正常に動作しています"}
 
-# --- 患者管理 API ---
 
-@app.get("/api/patients")
-def list_patients(db: Session = Depends(get_db)):
-    """患者一覧を取得"""
-    patients = db.query(Patient).order_by(Patient.name).all()
+@app.get("/api/patients", response_model=list[PatientResponse])
+def list_patients(db: Session = Depends(get_db)) -> list[PatientResponse]:
+    return list_patients_from_db(db)
+
+
+@app.post(
+    "/api/patients",
+    response_model=PatientResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_patient(payload: PatientCreate, db: Session = Depends(get_db)) -> PatientResponse:
+    patient_name = payload.name.strip()
+    if not patient_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="患者名を入力してください",
+        )
+
+    return create_patient_in_db(db, patient_name)
+
+
+@app.get(
+    "/api/patients/{patient_id}/records",
+    response_model=list[PastRecordResponse],
+)
+def get_patient_records(patient_id: int, db: Session = Depends(get_db)) -> list[PastRecordResponse]:
+    patient = get_patient_by_id(db, patient_id)
+    if patient is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="患者が見つかりません",
+        )
+
+    records = list_records_by_patient_id(db, patient_id)
     return [
-        {"id": p.id, "name": p.name, "created_at": p.created_at.isoformat()}
-        for p in patients
+        PastRecordResponse(
+            id=record.id,
+            created_at=record.created_at,
+            s_text=record.s_text or "",
+            o_text=record.o_text or "",
+            a_text=record.a_text or "",
+            p_text=record.p_text or "",
+            raw_text=record.raw_text or "",
+        )
+        for record in records
     ]
 
-@app.post("/api/patients")
-def create_patient(payload: PatientCreate, db: Session = Depends(get_db)):
-    """新規患者を作成"""
-    patient = Patient(name=payload.name)
-    db.add(patient)
-    db.commit()
-    db.refresh(patient)
-    return {"id": patient.id, "name": patient.name, "created_at": patient.created_at.isoformat()}
-
-@app.get("/api/patients/{patient_id}/records")
-def get_patient_records(patient_id: int, db: Session = Depends(get_db)):
-    """患者の過去記録を日付降順で取得"""
-    records = (
-        db.query(Record)
-        .filter(Record.patient_id == patient_id)
-        .order_by(Record.created_at.desc())
-        .all()
-    )
-    return [
-        {
-            "id": r.id,
-            "created_at": r.created_at.isoformat(),
-            "s_text": r.s_text,
-            "o_text": r.o_text,
-            "a_text": r.a_text,
-            "p_text": r.p_text,
-            "raw_text": r.raw_text,
-        }
-        for r in records
-    ]
 
 @app.post("/api/records", response_model=RecordResponse)
 async def create_record(
     patient_id: int = Form(...),
     audio: UploadFile = File(...),
-    db: Session = Depends(get_db)
-):
-    print(f"受付: 患者ID {patient_id} のデータを受信しました")
+    db: Session = Depends(get_db),
+) -> RecordResponse:
+    patient = get_patient_by_id(db, patient_id)
+    if patient is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="患者が見つかりません",
+        )
 
-    # 1. 音声を処理してSOAPと全体の文字起こし(raw_text)を取得
-    soap_data_dict, raw_text = await summarize_audio_to_soap(audio)
+    logger.info("audio record received for patient_id=%s", patient_id)
 
-    # 2. 取得したデータをDBに保存
-    new_record = Record(
+    soap_data, raw_text = await summarize_audio_to_soap(audio)
+    new_record = create_record_in_db(
+        db,
         patient_id=patient_id,
         raw_text=raw_text,
-        s_text=soap_data_dict.get("s_text", ""),
-        o_text=soap_data_dict.get("o_text", ""),
-        a_text=soap_data_dict.get("a_text", ""),
-        p_text=soap_data_dict.get("p_text", "")
+        soap_summary=soap_data,
     )
-    db.add(new_record)
-    db.commit()
-    db.refresh(new_record)
 
-    # 3. レスポンス整形
-    return RecordResponse(
-        message="AIによるSOAP要約が完了しました!",
-        original_text=raw_text,
-        soap_summary=SOAPSummary(**soap_data_dict),
-        patient_id=patient_id,
-        id=new_record.id,
-        created_at=new_record.created_at
-    )
+    return build_record_response(new_record)
